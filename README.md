@@ -2,7 +2,27 @@
 
 **Guided installer for the NLQ System.** Makes setup simple with a step-by-step wizard.
 
+⚠️ **Important:** You do NOT need to clone this repository. The installer runs as a pre-built Docker image. Simply clone the [main NLQ repository](https://github.com/rjames-dev/NLQ) instead.
+
 This is the easiest way to get NLQ running. If you prefer CLI installation or want more control, see the [main NLQ repository](https://github.com/rjames-dev/NLQ).
+
+---
+
+## Understanding the Workflow
+
+This repository contains the **source code** for the NLQ Installer. Here's how it fits in:
+
+1. **You clone:** The main [NLQ repository](https://github.com/rjames-dev/NLQ)
+2. **You run:** The pre-built installer Docker image (from Docker Hub)
+3. **The installer:** Uses this repository's code (already built into the Docker image)
+4. **You don't clone:** This NLQ-Installer repository
+
+**Why this repository exists:**
+- 📦 Source code for developers who want to build/modify the installer
+- 📖 Documentation for understanding how the installer works
+- 🐳 Dockerfile for building custom versions
+
+**For end users:** Just clone NLQ and run the docker command below. The installer image is ready to go!
 
 ---
 
