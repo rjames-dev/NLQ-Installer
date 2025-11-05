@@ -13,10 +13,13 @@ export default function Setup({ onComplete }) {
     includeMigration: false,
     migrationPassword: '',
     registry: 'rfinancials/mydocker-repo', // Docker registry for NLQ images
-    version: 'v1.0.0'
+    version: 'v1.0.0',
+    deploymentServicePort: 3002 // Deployment service port
   });
 
   const [deploymentLogs, setDeploymentLogs] = useState([]);
+  const [deploymentPort, setDeploymentPort] = useState(null);
+  const [portCheckStatus, setPortCheckStatus] = useState(null);
 
   const steps = [
     {
@@ -193,7 +196,7 @@ export default function Setup({ onComplete }) {
         {/* Step Content */}
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-8 min-h-[400px]">
           {step === 0 && <WelcomeStep />}
-          {step === 1 && <RequirementsStep />}
+          {step === 1 && <RequirementsStep formData={formData} onFormDataChange={handleInputChange} onPortSelect={(port) => setDeploymentPort(port)} />}
           {step === 2 && <ConfigureStep formData={formData} onChange={handleInputChange} />}
           {step === 3 && <ReviewStep formData={formData} />}
           {step === 4 && (
@@ -271,18 +274,72 @@ function WelcomeStep() {
   );
 }
 
-function RequirementsStep() {
+function RequirementsStep({ formData, onFormDataChange, onPortSelect }) {
   const [checks, setChecks] = React.useState({
     docker: null,
     diskSpace: null,
     ram: null,
-    ports: null
+    ports: null,
+    deploymentService: null
   });
+  const [portInfo, setPortInfo] = React.useState(null);
+  const [selectedPort, setSelectedPort] = React.useState(3002);
 
   React.useEffect(() => {
-    // Simulate requirement checks
-    setTimeout(() => setChecks({ docker: true, diskSpace: true, ram: true, ports: true }), 1000);
+    const runChecks = async () => {
+      // Simulate basic requirement checks
+      setTimeout(() => setChecks(prev => ({
+        ...prev,
+        docker: true,
+        diskSpace: true,
+        ram: true,
+        ports: true
+      })), 500);
+
+      // Check deployment service port availability
+      try {
+        const response = await fetch('/api/deployment-port');
+        const data = await response.json();
+        setPortInfo(data);
+
+        if (data.available) {
+          setSelectedPort(data.port);
+          setChecks(prev => ({ ...prev, deploymentService: true }));
+        } else {
+          setSelectedPort(data.alternatives && data.alternatives.length > 0 ? data.alternatives[0] : 3002);
+          setChecks(prev => ({ ...prev, deploymentService: false }));
+        }
+      } catch (error) {
+        console.error('Error checking deployment port:', error);
+        setChecks(prev => ({ ...prev, deploymentService: false }));
+      }
+    };
+
+    runChecks();
   }, []);
+
+  const handlePortSelection = (port) => {
+    setSelectedPort(port);
+  };
+
+  const confirmPortSelection = async () => {
+    try {
+      const response = await fetch('/api/deployment-port', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: selectedPort })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setChecks(prev => ({ ...prev, deploymentService: true }));
+        onFormDataChange({ target: { name: 'deploymentServicePort', value: selectedPort, type: 'number' } });
+        if (onPortSelect) onPortSelect(selectedPort);
+      }
+    } catch (error) {
+      console.error('Error setting deployment port:', error);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -293,7 +350,51 @@ function RequirementsStep() {
         <RequirementCheck label="Sufficient disk space (10GB+)" status={checks.diskSpace} />
         <RequirementCheck label="Available RAM (2GB+)" status={checks.ram} />
         <RequirementCheck label="Required ports available" status={checks.ports} />
+        <RequirementCheck label="Deployment Service Port" status={checks.deploymentService} />
       </div>
+
+      {/* Deployment Service Port Selection */}
+      {portInfo && (
+        <div className={`p-4 rounded-lg border ${portInfo.available ? 'bg-green-900 border-green-700' : 'bg-yellow-900 border-yellow-700'}`}>
+          <h3 className="font-bold mb-3">Deployment Service Port Configuration</h3>
+          {portInfo.available ? (
+            <div className={`text-${portInfo.available ? 'green' : 'yellow'}-200`}>
+              <p className="mb-3">Port 3002 is available and will be used for the deployment service.</p>
+              <button
+                onClick={confirmPortSelection}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-medium transition"
+              >
+                ✓ Confirm Port 3002
+              </button>
+            </div>
+          ) : (
+            <div className="text-yellow-200">
+              <p className="mb-3">Port 3002 is in use. Please select an available port:</p>
+              <div className="space-y-2 mb-4">
+                {portInfo.alternatives && portInfo.alternatives.map(port => (
+                  <label key={port} className="flex items-center gap-3 p-2 bg-yellow-800 rounded cursor-pointer hover:bg-yellow-700">
+                    <input
+                      type="radio"
+                      name="deploymentPort"
+                      value={port}
+                      checked={selectedPort === port}
+                      onChange={() => handlePortSelection(port)}
+                      className="w-4 h-4"
+                    />
+                    <span>Use port {port}</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={confirmPortSelection}
+                className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded font-medium transition"
+              >
+                ✓ Confirm Port {selectedPort}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {Object.values(checks).every(v => v === true) && (
         <div className="bg-green-900 border border-green-700 rounded-lg p-4 text-green-200">

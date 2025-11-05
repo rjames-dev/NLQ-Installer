@@ -57,3 +57,11 @@ docker-volumes/
 README-DEV.md
 ROADMAP.md
 CLAUDE.md
+
+# Deployment service documentation (internal notes)
+../nlq-installer-docker-mods.md
+../DEPLOYMENT_SERVICE.md
+../DEPLOYMENT_QUICK_START.md
+../IMPLEMENTATION_SUMMARY.md
+../deployment-service.js
+../start-deployment-service.sh

@@ -7,6 +7,7 @@ import axios from 'axios';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
+import net from 'net';
 
 const app = express();
 const port = process.env.PORT || 3001; // Dashboard runs on 3001, platform services on different ports
@@ -52,8 +53,66 @@ app.use(express.static('dist'));
 let platformState = {
   isInstalled: false,
   config: {},
-  services: {}
+  services: {},
+  deploymentServicePort: null
 };
+
+// =====================================================================
+// Port Detection Utilities
+// =====================================================================
+
+/**
+ * Check if a port is available on localhost
+ */
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Find available port starting from given port
+ */
+async function findAvailablePort(startPort = 3002, maxAttempts = 10) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const testPort = startPort + i;
+    if (await isPortAvailable(testPort)) {
+      return testPort;
+    }
+  }
+  return null;
+}
+
+/**
+ * Get host address for container communication
+ * Returns appropriate hostname based on platform
+ */
+function getHostAddress() {
+  const platform = process.platform;
+
+  // On macOS and Windows with Docker Desktop, use host.docker.internal
+  if (platform === 'darwin' || platform === 'win32') {
+    return 'host.docker.internal';
+  }
+
+  // On Linux, use the Docker gateway IP
+  return '172.17.0.1';
+}
 
 // Helper: Load configuration from .env
 function loadConfig() {
@@ -84,49 +143,69 @@ function loadConfig() {
   }
 }
 
-// Helper: Execute docker-compose deployment
-async function deploySystem(system = 'nlq') {
-  return new Promise((resolve, reject) => {
-    // Determine the docker-compose directory
-    let composePath;
-    if (system === 'migration') {
-      composePath = existsSync('/app/migration-system') ? '/app/migration-system' : './migration-system';
-    } else {
-      composePath = existsSync('/app/nlq-system') ? '/app/nlq-system' : './nlq-system';
-    }
+// Helper: Execute docker-compose deployment via host service
+async function deploySystem(system = 'nlq', deploymentPort = null) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Determine the docker-compose directory
+      let composePath;
+      if (system === 'migration') {
+        composePath = existsSync('/app/migration-system') ? '/app/migration-system' : './migration-system';
+      } else {
+        composePath = existsSync('/app/nlq-system') ? '/app/nlq-system' : './nlq-system';
+      }
 
-    const command = `docker-compose -f "${composePath}/docker-compose.yml" up -d`;
+      // Use provided port or from platform state
+      const port = deploymentPort || platformState.deploymentServicePort || 3002;
+      const hostAddress = getHostAddress();
+      const deploymentServiceUrl = `http://${hostAddress}:${port}/deploy`;
 
-    console.log(`🚀 Starting deployment: ${command}`);
+      console.log(`🚀 Starting deployment via host service: ${deploymentServiceUrl}`);
+      console.log(`📦 System: ${system}`);
+      console.log(`📂 Compose path: ${composePath}`);
 
-    const child = exec(command, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('❌ Deployment error:', error);
+      // Call the host deployment service
+      const response = await axios.post(deploymentServiceUrl, {
+        system: system,
+        composePath: composePath
+      }, {
+        timeout: 30 * 60 * 1000 // 30 minute timeout
+      });
+
+      const data = response.data;
+
+      if (data.status === 'error') {
+        console.error('❌ Deployment error:', data.message);
         reject({
           status: 'error',
-          message: `Deployment failed: ${error.message}`,
-          stderr: stderr
+          message: `Deployment failed: ${data.message}`,
+          stderr: data.stderr,
+          composePath: data.composePath
         });
       } else {
-        console.log('✅ Deployment completed');
-        console.log(stdout);
+        console.log('✅ Deployment initiated on host');
+        console.log(data.stdout);
         resolve({
           status: 'success',
-          message: `${system} system deployment initiated`,
-          stdout: stdout
+          message: `${system} system deployment initiated via host service`,
+          stdout: data.stdout,
+          system: system
         });
       }
-    });
+    } catch (error) {
+      console.error('❌ Deployment service error:', error.message);
 
-    // Stream logs back to caller if WebSocket is available
-    if (child.stdout) {
-      child.stdout.on('data', (data) => {
-        console.log(data.toString());
-      });
-    }
-    if (child.stderr) {
-      child.stderr.on('data', (data) => {
-        console.log(data.toString());
+      // Provide helpful error messages
+      let message = error.message;
+      if (error.code === 'ECONNREFUSED') {
+        message = `Could not connect to deployment service. Make sure the deployment service is running on port ${platformState.deploymentServicePort || 3002}`;
+      }
+
+      reject({
+        status: 'error',
+        message: `Deployment failed: ${message}`,
+        system: system,
+        error: error.message
       });
     }
   });
@@ -274,6 +353,78 @@ app.get('/api/services/status', async (req, res) => {
   }
 });
 
+// GET - Deployment service port detection
+app.get('/api/deployment-port', async (req, res) => {
+  try {
+    const defaultPort = 3002;
+    const available = await isPortAvailable(defaultPort);
+
+    if (available) {
+      platformState.deploymentServicePort = defaultPort;
+      return res.json({
+        available: true,
+        port: defaultPort,
+        host: getHostAddress(),
+        url: `http://${getHostAddress()}:${defaultPort}`
+      });
+    }
+
+    // Port 3002 is in use, find alternatives
+    console.log(`⚠️ Port ${defaultPort} is in use, finding alternatives...`);
+    const alternatives = [];
+
+    for (let i = 1; i <= 5; i++) {
+      const testPort = defaultPort + i;
+      if (await isPortAvailable(testPort)) {
+        alternatives.push(testPort);
+      }
+    }
+
+    res.json({
+      available: false,
+      port: defaultPort,
+      inUse: true,
+      alternatives: alternatives,
+      host: getHostAddress(),
+      message: `Default port ${defaultPort} is in use. Available alternatives: ${alternatives.join(', ')}`
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST - Set deployment service port
+app.post('/api/deployment-port', async (req, res) => {
+  try {
+    const { port } = req.body;
+
+    if (!port || typeof port !== 'number') {
+      return res.status(400).json({ error: 'Port must be a number' });
+    }
+
+    const available = await isPortAvailable(port);
+
+    if (!available) {
+      return res.status(400).json({
+        error: `Port ${port} is not available`,
+        port: port
+      });
+    }
+
+    platformState.deploymentServicePort = port;
+    console.log(`✅ Deployment service port set to ${port}`);
+
+    res.json({
+      success: true,
+      port: port,
+      host: getHostAddress(),
+      url: `http://${getHostAddress()}:${port}`
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST - Restart service
 app.post('/api/services/:service/restart', async (req, res) => {
   try {
@@ -333,15 +484,16 @@ app.post('/api/install', async (req, res) => {
     }
 
     console.log('🚀 Initiating docker-compose deployment...');
+    console.log(`📍 Using deployment service on port: ${platformState.deploymentServicePort || 3002}`);
 
-    // Trigger docker-compose deployment asynchronously
+    // Trigger docker-compose deployment asynchronously via host service
     // Don't wait for it to complete - return immediately and stream logs separately
-    deploySystem('nlq').catch(error => {
+    deploySystem('nlq', config.deploymentServicePort).catch(error => {
       console.error('❌ NLQ deployment error:', error);
     });
 
     if (config.includeMigration) {
-      deploySystem('migration').catch(error => {
+      deploySystem('migration', config.deploymentServicePort).catch(error => {
         console.error('❌ Migration deployment error:', error);
       });
     }
