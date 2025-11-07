@@ -69,6 +69,26 @@ export default function Setup({ onComplete }) {
     setDeploymentLogs([]);
 
     try {
+      // Validate required fields
+      const requiredFields = [
+        { key: 'apiKey', label: 'Anthropic API Key' },
+        { key: 'openwebuiPassword', label: 'OpenWebUI Database Password' },
+        { key: 'mcpdbPassword', label: 'MCP Database Password' },
+        { key: 'litellmKey', label: 'LiteLLM Master Key' },
+        { key: 'webuiSecret', label: 'WebUI Secret Key' }
+      ];
+
+      const missingFields = requiredFields.filter(field => !formData[field.key] || formData[field.key].trim() === '');
+
+      if (missingFields.length > 0) {
+        addLog('❌ Configuration validation failed:');
+        missingFields.forEach(field => {
+          addLog(`   - ${field.label} is required`);
+        });
+        setDeploying(false);
+        return;
+      }
+
       addLog('Starting NLQ System deployment...');
       addLog('📝 Saving configuration to .env file...');
 
