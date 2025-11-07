@@ -99,13 +99,20 @@ async function findAvailablePort(startPort = 3002, maxAttempts = 10) {
 }
 
 /**
- * Get host address for container communication
- * Returns appropriate hostname based on platform
+ * Get deployment service hostname for container communication
+ * Returns appropriate hostname based on execution context
  */
-function getHostAddress() {
-  const platform = process.platform;
+function getDeploymentServiceHost() {
+  // If DEPLOYMENT_SERVICE_PORT is set, we're running in docker-compose
+  // Use the container hostname for DNS resolution via docker-compose network
+  if (process.env.DEPLOYMENT_SERVICE_PORT) {
+    console.log('🐳 Running in docker-compose environment - using container hostname');
+    return 'nlq-deployment-service';
+  }
 
-  // On macOS and Windows with Docker Desktop, use host.docker.internal
+  // Otherwise, we're running locally/outside docker
+  // Use host.docker.internal for Docker Desktop on Mac/Windows
+  const platform = process.platform;
   if (platform === 'darwin' || platform === 'win32') {
     return 'host.docker.internal';
   }
@@ -143,31 +150,23 @@ function loadConfig() {
   }
 }
 
-// Helper: Execute docker-compose deployment via host service
+// Helper: Execute docker-compose deployment via deployment service
 async function deploySystem(system = 'nlq', deploymentPort = null) {
   return new Promise(async (resolve, reject) => {
     try {
-      // Determine the docker-compose directory
-      let composePath;
-      if (system === 'migration') {
-        composePath = existsSync('/app/migration-system') ? '/app/migration-system' : './migration-system';
-      } else {
-        composePath = existsSync('/app/nlq-system') ? '/app/nlq-system' : './nlq-system';
-      }
-
       // Use provided port or from platform state
       const port = deploymentPort || platformState.deploymentServicePort || 3002;
-      const hostAddress = getHostAddress();
-      const deploymentServiceUrl = `http://${hostAddress}:${port}/deploy`;
+      const deploymentServiceHost = getDeploymentServiceHost();
+      const deploymentServiceUrl = `http://${deploymentServiceHost}:${port}/deploy`;
 
-      console.log(`🚀 Starting deployment via host service: ${deploymentServiceUrl}`);
+      console.log(`🚀 Starting deployment via service: ${deploymentServiceUrl}`);
       console.log(`📦 System: ${system}`);
-      console.log(`📂 Compose path: ${composePath}`);
+      console.log(`🐳 Using deployment service host: ${deploymentServiceHost}`);
 
-      // Call the host deployment service
+      // Call the deployment service
+      // Note: deploymentService reads paths from environment variables, not from request body
       const response = await axios.post(deploymentServiceUrl, {
-        system: system,
-        composePath: composePath
+        system: system
       }, {
         timeout: 30 * 60 * 1000 // 30 minute timeout
       });
