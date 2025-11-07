@@ -364,7 +364,7 @@ function RequirementCheck({ label, status }) {
 
 function ConfigureStep({ formData, onChange }) {
   return (
-    <div className="space-y-6">
+    <form className="space-y-6">
       <h2 className="text-2xl font-bold">Configure Your System</h2>
 
       <div className="space-y-4">
@@ -464,7 +464,7 @@ function ConfigureStep({ formData, onChange }) {
           </label>
         </div>
       </div>
-    </div>
+    </form>
   );
 }
 
